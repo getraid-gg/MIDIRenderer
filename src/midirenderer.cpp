@@ -6,6 +6,7 @@
 #include <ctime>
 #include <string>
 #include <sstream>
+#include <fstream>
 #include <vector>
 
 #include <fluidsynth.h>
@@ -32,7 +33,7 @@ struct CallbackData
 };
 
 int playerEventCallback(void* data, fluid_midi_event_t* event);
-bool renderSong(fluid_synth_t* synth, CallbackData &data, std::string fileName, int endingBeatDivision, OggVorbisEncoder& outputFile, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& sampleCount);
+bool renderSong(fluid_synth_t* synth, CallbackData& data, std::string fileName, int endingBeatDivision, OggVorbisEncoder& outputFile, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& sampleCount);
 
 using namespace midirenderer;
 
@@ -131,7 +132,7 @@ int MAIN(int argc, argv_t** argv)
 	std::vector<std::string> outputFiles;
 	if (parsedArgs.count("files") > 0)
 	{
-		const std::vector<std::string> &midiPaths = parsedArgs["files"].as<std::vector<std::string>>();
+		const std::vector<std::string>& midiPaths = parsedArgs["files"].as<std::vector<std::string>>();
 		for (const auto& path : midiPaths)
 		{
 			int midiFileCount = midiFiles.size();
@@ -197,7 +198,7 @@ int MAIN(int argc, argv_t** argv)
 	{
 		std::default_random_engine rng;
 		rng.seed(time(NULL));
-		OggVorbisEncoder outputFile = OggVorbisEncoder(static_cast<int>(rng()), 44100, 0.4);
+		OggVorbisEncoder encoder = OggVorbisEncoder(static_cast<int>(rng()), 44100, 0.4);
 
 		fluid_synth_all_sounds_off(synth, -1);
 		std::cout << "Rendering " << midiFiles[i] << "..." << std::endl;
@@ -207,30 +208,37 @@ int MAIN(int argc, argv_t** argv)
 		bool hasLoopPoint = false;
 		uint64_t loopPoint = 0;
 
-		bool didRenderSucceed = renderSong(synth, data, midiFiles[i], beatDivision, outputFile, hasLoopPoint, loopPoint, samplePosition);
+		bool didRenderSucceed = renderSong(synth, data, midiFiles[i], beatDivision, encoder, hasLoopPoint, loopPoint, samplePosition);
 		if (!didRenderSucceed) return 1;
 		if (isLoopingInFile)
 		{
-			didRenderSucceed = renderSong(synth, data, midiFiles[i], beatDivision, outputFile, hasLoopPoint, loopPoint, samplePosition);
+			didRenderSucceed = renderSong(synth, data, midiFiles[i], beatDivision, encoder, hasLoopPoint, loopPoint, samplePosition);
 			if (!didRenderSucceed) return 1;
 		}
 
-		outputFile.addComment("ENCODER", "libvorbis (midirenderer)");
+		encoder.addComment("ENCODER", "libvorbis (midirenderer)");
 		if (hasLoopPoint)
 		{
-			outputFile.addComment("LOOPSTART", std::to_string(loopPoint));
-			outputFile.addComment("LOOPLENGTH", std::to_string(samplePosition - loopPoint));
+			encoder.addComment("LOOPSTART", std::to_string(loopPoint));
+			encoder.addComment("LOOPLENGTH", std::to_string(samplePosition - loopPoint));
 		}
 
-		std::cout << "Encoding..." << std::endl;
+		std::ofstream fileOutput;
+		fileOutput.open(stringutils::getPlatformString(outputFiles[i]), std::ios_base::out | std::ios_base::binary);
+		auto pageCallback = [&](const unsigned char* header, long headerLength, const unsigned char* body, long bodyLength)
+		{
+			fileOutput.write(reinterpret_cast<const char*>(header), headerLength);
+			fileOutput.write(reinterpret_cast<const char*>(body), bodyLength);
+		};
 
-		outputFile.writeToFile(outputFiles[i]);
+		encoder.readHeader(pageCallback);
+		encoder.completeStream(pageCallback);
 	}
 
     return 0;
 }
 
-bool renderSong(fluid_synth_t* synth, CallbackData &data, std::string fileName, int endingBeatDivision, OggVorbisEncoder& outputFile, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& samplePosition)
+bool renderSong(fluid_synth_t* synth, CallbackData& data, std::string fileName, int endingBeatDivision, OggVorbisEncoder& encoder, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& samplePosition)
 {
 	fluid_player_t* player = new_fluid_player(synth);
 	std::shared_ptr<fluid_player_t> playerWrapper(player, delete_fluid_player);
@@ -284,7 +292,7 @@ bool renderSong(fluid_synth_t* synth, CallbackData &data, std::string fileName, 
 		if (bufferIndex >= BUFFER_FRAMES_COUNT)
 		{
 			bufferIndex -= BUFFER_FRAMES_COUNT;
-			outputFile.writeBuffers(leftBuffer, rightBuffer, BUFFER_FRAMES_COUNT);
+			encoder.writeBuffers(leftBuffer, rightBuffer, BUFFER_FRAMES_COUNT);
 		}
 
 		if (!hasLoopPoint && data.m_hasHitLoopPoint)
@@ -296,7 +304,6 @@ bool renderSong(fluid_synth_t* synth, CallbackData &data, std::string fileName, 
 		int tempo = fluid_player_get_midi_tempo(player);
 		if (tempo != lastTempo)
 		{
-			std::cout << "Tempo change at sample " << samplePosition << ": " << lastTempo << " to " << tempo << std::endl;
 			lastTempo = tempo;
 			lastTempoSample = samplePosition;
 		}
@@ -324,14 +331,17 @@ bool renderSong(fluid_synth_t* synth, CallbackData &data, std::string fileName, 
 			if (bufferIndex >= BUFFER_FRAMES_COUNT)
 			{
 				bufferIndex -= BUFFER_FRAMES_COUNT;
-				outputFile.writeBuffers(leftBuffer, rightBuffer, BUFFER_FRAMES_COUNT);
+				encoder.writeBuffers(leftBuffer, rightBuffer, BUFFER_FRAMES_COUNT);
 			}
 			samplePosition++;
 		}
 	}
 
-	// play the voice runoff of the end, which may or may not end up part of the loop
-	size_t runoffSampleCount = 0;
+	// Play the voice runoff of the end, which may or may not end up part of the loop
+
+	// samplePosition isn't incremented here because it's used to determine loop points
+	// and the runoff is not meant to delay the loop point at the end of the song.
+	encoder.startOverlapRegion();
 	while (fluid_synth_get_active_voice_count(synth) > 0)
 	{
 		if (fluid_synth_write_float(synth, 1, leftBuffer, bufferIndex, 1, rightBuffer, bufferIndex, 1))
@@ -343,17 +353,15 @@ bool renderSong(fluid_synth_t* synth, CallbackData &data, std::string fileName, 
 		if (bufferIndex >= BUFFER_FRAMES_COUNT)
 		{
 			bufferIndex -= BUFFER_FRAMES_COUNT;
-			outputFile.writeBuffers(leftBuffer, rightBuffer, BUFFER_FRAMES_COUNT);
+			encoder.writeBuffers(leftBuffer, rightBuffer, BUFFER_FRAMES_COUNT);
 		}
-		runoffSampleCount++;
 	}
 
 	if (bufferIndex != 0)
 	{
-		outputFile.writeBuffers(leftBuffer, rightBuffer, bufferIndex);
+		encoder.writeBuffers(leftBuffer, rightBuffer, bufferIndex);
 	}
-
-	outputFile.setOverlapOffset(runoffSampleCount);
+	encoder.endOverlapRegion();
 
 	return true;
 }

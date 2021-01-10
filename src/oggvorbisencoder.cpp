@@ -1,7 +1,5 @@
 #include "oggvorbisencoder.h"
 
-#include "platformsupport.h"
-
 #include <algorithm>
 #include <fstream>
 #include <stdexcept>
@@ -10,8 +8,8 @@
 
 #include <vorbis/vorbisenc.h>
 
-OggVorbisEncoder::OggVorbisEncoder(int streamID, long sampleRate, float quality) : m_isComplete(false), m_hasWrittenHeaders(false),
-	m_overlapOffset(0)
+OggVorbisEncoder::OggVorbisEncoder(int streamID, long sampleRate, float quality) : m_isComplete(false),
+	m_streamID(streamID), m_isWritingOverlapRegion(false), m_overlapOffset(0)
 {
 	vorbis_info_init(&m_info);
 	int status = vorbis_encode_init_vbr(&m_info, 2, sampleRate, quality);
@@ -24,7 +22,7 @@ OggVorbisEncoder::OggVorbisEncoder(int streamID, long sampleRate, float quality)
 	vorbis_analysis_init(&m_dspState, &m_info);
 	vorbis_block_init(&m_dspState, &m_block);
 
-	ogg_stream_init(&m_stream, streamID);
+	ogg_stream_init(&m_stream, m_streamID);
 }
 
 OggVorbisEncoder::~OggVorbisEncoder()
@@ -38,100 +36,132 @@ OggVorbisEncoder::~OggVorbisEncoder()
 
 bool OggVorbisEncoder::getIsComplete() { return m_isComplete; }
 
-bool OggVorbisEncoder::getHasWrittenHeaders() { return m_hasWrittenHeaders; }
-
 void OggVorbisEncoder::addComment(std::string tag, std::string contents)
 {
-	throwIfWrittenHeaders();
 	vorbis_comment_add_tag(&m_comment, tag.c_str(), contents.c_str());
 }
 
-void OggVorbisEncoder::writeBuffers(float* leftBuffer, float* rightBuffer, size_t frameCount)
-{
-	throwIfComplete();
-	size_t sourceFrameOffset = 0;
-	
-	const size_t bufferSize = m_rawBuffer[0].size();
-
-	while (m_overlapOffset > 0 && sourceFrameOffset < frameCount)
-	{
-		m_rawBuffer[0][bufferSize - m_overlapOffset] += leftBuffer[sourceFrameOffset];
-		m_rawBuffer[1][bufferSize - m_overlapOffset] += rightBuffer[sourceFrameOffset];
-		m_overlapOffset--;
-		sourceFrameOffset++;
-	}
-
-	if (sourceFrameOffset < frameCount)
-	{
-		m_rawBuffer[0].insert(m_rawBuffer[0].end(), &leftBuffer[sourceFrameOffset], &leftBuffer[frameCount]);
-		m_rawBuffer[1].insert(m_rawBuffer[1].end(), &rightBuffer[sourceFrameOffset], &rightBuffer[frameCount]);
-	}
-}
-
-void OggVorbisEncoder::setOverlapOffset(size_t offset)
-{
-	if (m_overlapOffset > m_rawBuffer[0].size())
-	{
-		throw std::out_of_range("Ogg Vorbis file write overlap offset is greater than the number of samples already written");
-	}
-
-	m_overlapOffset = offset;
-}
-
-void OggVorbisEncoder::writeToFile(std::string filePath)
+void OggVorbisEncoder::writeBuffers(const float* leftBuffer, const float* rightBuffer, size_t frameCount)
 {
 	throwIfComplete();
 
-	m_isComplete = true;
-	m_hasWrittenHeaders = true;
+	if (m_isWritingOverlapRegion)
+	{
+		m_overlapBuffers[0].insert(m_overlapBuffers[0].end(), &leftBuffer[0], &leftBuffer[frameCount]);
+		m_overlapBuffers[1].insert(m_overlapBuffers[1].end(), &rightBuffer[0], &rightBuffer[frameCount]);
+		m_overlapOffset += frameCount;
+	}
+	else
+	{
+		size_t sourceFrameOffset = 0;
+		const size_t overlapBufferSize = m_overlapBuffers[0].size();
+
+		while (m_overlapOffset > 0 && sourceFrameOffset < frameCount)
+		{
+			m_overlapBuffers[0][overlapBufferSize - m_overlapOffset] += leftBuffer[sourceFrameOffset];
+			m_overlapBuffers[1][overlapBufferSize - m_overlapOffset] += rightBuffer[sourceFrameOffset];
+			m_overlapOffset--;
+			sourceFrameOffset++;
+		}
+
+		if (m_overlapOffset == 0 && sourceFrameOffset > 0)
+		{
+			// Exhausted the buffer overlap - it can be written now
+			encodeBuffers(m_overlapBuffers[0].data(), m_overlapBuffers[1].data(), overlapBufferSize);
+			m_overlapBuffers[0].clear();
+			m_overlapBuffers[1].clear();
+		}
+
+		if (sourceFrameOffset < frameCount)
+		{
+			encodeBuffers(&leftBuffer[sourceFrameOffset], &rightBuffer[sourceFrameOffset], frameCount - sourceFrameOffset);
+		}
+	}
+}
+
+void OggVorbisEncoder::startOverlapRegion()
+{
+	m_isWritingOverlapRegion = true;
+}
+
+void OggVorbisEncoder::endOverlapRegion()
+{
+	m_isWritingOverlapRegion = false;
+}
+
+void OggVorbisEncoder::readHeader(const PageCallbackFunc& pageCallback)
+{
+	ogg_stream_state headerStream;
+	ogg_stream_init(&headerStream, m_streamID);
 
 	ogg_packet header;
 	ogg_packet commentsHeader;
 	ogg_packet codebookHeader;
 
 	vorbis_analysis_headerout(&m_dspState, &m_comment, &header, &commentsHeader, &codebookHeader);
-	ogg_stream_packetin(&m_stream, &header);
-	ogg_stream_packetin(&m_stream, &commentsHeader);
-	ogg_stream_packetin(&m_stream, &codebookHeader);
+	ogg_stream_packetin(&headerStream, &header);
+	ogg_stream_packetin(&headerStream, &commentsHeader);
+	ogg_stream_packetin(&headerStream, &codebookHeader);
 
-	std::ofstream outputFileStream;
-	outputFileStream.open(midirenderer::stringutils::getPlatformString(filePath), std::ios_base::out | std::ios_base::binary);
-
-	if (!outputFileStream.is_open())
+	ogg_page page;
+	while (ogg_stream_flush(&headerStream, &page) != 0)
 	{
-		std::stringstream errorStringStream;
-		errorStringStream << "Failed to open file path " << filePath << " for writing";
-		throw std::runtime_error(errorStringStream.str().c_str());
+		executePageCallback(pageCallback, page);
 	}
 
-	// flush the stream to end the header page before starting the audio page (required by the Vorbis spec)
-	while (true)
+	ogg_stream_clear(&headerStream);
+}
+
+void OggVorbisEncoder::readStreamPages(const PageCallbackFunc& pageCallback)
+{
+	ogg_page page;
+	while (ogg_stream_pageout(&m_stream, &page) != 0)
 	{
-		int streamFlushLength = ogg_stream_flush(&m_stream, &m_page);
-		if (streamFlushLength == 0) { break; }
-		outputFileStream.write(reinterpret_cast<const char*>(m_page.header), m_page.header_len);
-		outputFileStream.write(reinterpret_cast<const char*>(m_page.body), m_page.body_len);
+		executePageCallback(pageCallback, page);
+	}
+}
+
+void OggVorbisEncoder::completeStream(const PageCallbackFunc& pageCallback)
+{
+	throwIfComplete();
+	m_isComplete = true;
+	m_isWritingOverlapRegion = false;
+
+	if (m_overlapOffset > 0)
+	{
+		encodeBuffers(m_overlapBuffers[0].data(), m_overlapBuffers[1].data(), m_overlapBuffers[0].size());
+		m_overlapBuffers[0].clear();
+		m_overlapBuffers[1].clear();
+		m_overlapOffset = 0;
 	}
 
-	int offset = 0;
-	int framesRemaining = m_rawBuffer[0].size();
+	vorbis_analysis_wrote(&m_dspState, 0);
+
+	readStreamPages(pageCallback);
+}
+
+void OggVorbisEncoder::executePageCallback(const PageCallbackFunc& pageCallback, const ogg_page& page)
+{
+	pageCallback(page.header, page.header_len, page.body, page.body_len);
+}
+
+void OggVorbisEncoder::encodeBuffers(const float* leftBuffer, const float* rightBuffer, size_t frameCount)
+{
+	size_t offset = 0;
+	size_t framesRemaining = frameCount;
 	while (framesRemaining > 0)
 	{
-		int frameCount = std::min(s_writeChunkSize, framesRemaining);
+		size_t framesToWrite = std::min(s_writeChunkSize, framesRemaining);
 
-		float** buffer = vorbis_analysis_buffer(&m_dspState, frameCount);
+		float** buffer = vorbis_analysis_buffer(&m_dspState, framesToWrite);
 
-		std::copy(m_rawBuffer[0].begin() + offset, m_rawBuffer[0].begin() + offset + frameCount, buffer[0]);
-		std::copy(m_rawBuffer[1].begin() + offset, m_rawBuffer[1].begin() + offset + frameCount, buffer[1]);
+		std::copy(&leftBuffer[offset], &leftBuffer[offset + framesToWrite], buffer[0]);
+		std::copy(&rightBuffer[offset], &rightBuffer[offset + framesToWrite], buffer[1]);
 
-		vorbis_analysis_wrote(&m_dspState, frameCount);
+		vorbis_analysis_wrote(&m_dspState, framesToWrite);
 
-		framesRemaining -= frameCount;
-		offset += frameCount;
-		if (framesRemaining == 0)
-		{
-			vorbis_analysis_wrote(&m_dspState, 0);
-		}
+		framesRemaining -= framesToWrite;
+		offset += framesToWrite;
 
 		while (true)
 		{
@@ -139,7 +169,7 @@ void OggVorbisEncoder::writeToFile(std::string filePath)
 			if (blockStatus == 0) { break; }
 			else if (blockStatus < 0)
 			{
-				throw std::runtime_error("Failed to read an audio block while writing file");
+				throw std::runtime_error("Failed to read an audio block while encoding");
 			}
 
 			// This is only used when using bitrate management but it's
@@ -150,40 +180,21 @@ void OggVorbisEncoder::writeToFile(std::string filePath)
 
 			while (true)
 			{
-				int packetStatus = vorbis_bitrate_flushpacket(&m_dspState, &m_packet);
+				ogg_packet packet;
+				int packetStatus = vorbis_bitrate_flushpacket(&m_dspState, &packet);
 				if (packetStatus == 0) { break; }
 				else if (packetStatus < 0)
 				{
-					throw std::runtime_error("Failed to read a packet audio block while writing file");
+					throw std::runtime_error("Failed to read a packet audio block while encoding");
 				}
 
-				ogg_stream_packetin(&m_stream, &m_packet);
-
-				while (true)
-				{
-					int pageStatus = ogg_stream_pageout(&m_stream, &m_page);
-					if (pageStatus == 0) { break; }
-					else if (pageStatus < 0)
-					{
-						throw std::runtime_error("Failed to read the stream page out while writing file");
-					}
-
-					outputFileStream.write(reinterpret_cast<char*>(m_page.header), m_page.header_len);
-					outputFileStream.write(reinterpret_cast<char*>(m_page.body), m_page.body_len);
-				}
+				ogg_stream_packetin(&m_stream, &packet);
 			}
 		}
 	}
-
-	outputFileStream.close();
 }
 
 void OggVorbisEncoder::throwIfComplete()
 {
 	if (m_isComplete) { throw std::runtime_error("Attempted to use a completed Vorbis encoder"); }
-}
-
-void OggVorbisEncoder::throwIfWrittenHeaders()
-{
-	if (m_hasWrittenHeaders) { throw std::runtime_error("Attempted to modify headers that have already been written"); }
 }

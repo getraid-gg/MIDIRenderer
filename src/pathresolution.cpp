@@ -8,7 +8,7 @@ namespace fs = std::filesystem;
 
 namespace midirenderer::utils
 {
-	void enumerateWildcardPath(const fs::path &parentFolder, size_t pathIndex, const vector<string> &pathList,
+	void enumerateWildcardPath(const fs::path& parentFolder, size_t pathIndex, const vector<string>& pathList,
 		function<void(string)> pathCallback);
 
 	void resolveWildcardedPath(const std::string& path, std::function<void(std::string)> pathCallback)

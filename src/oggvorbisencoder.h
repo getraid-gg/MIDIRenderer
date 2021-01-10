@@ -1,44 +1,48 @@
 #pragma once
-#include "platformchar.h"
-
 #include <memory>
-#include <vector>
+#include <array>
+#include <functional>
 
 #include <vorbis/codec.h>
 
 class OggVorbisEncoder
 {
 public:
+	typedef std::function<void(const unsigned char*, long, const unsigned char*, long)> PageCallbackFunc;
+
 	OggVorbisEncoder(int streamID, long sampleRate, float quality);
 	~OggVorbisEncoder();
 
 	bool getIsComplete();
-	bool getHasWrittenHeaders();
 
 	void addComment(std::string tag, std::string contents);
 
-	void writeBuffers(float* leftBuffer, float* rightBuffer, size_t frameCount);
-	void setOverlapOffset(size_t offset);
+	void writeBuffers(const float* leftBuffer, const float* rightBuffer, size_t frameCount);
+	void startOverlapRegion();
+	void endOverlapRegion();
 
-	void writeToFile(std::string filePath);
+	void readHeader(const PageCallbackFunc& pageCallback);
+	void readStreamPages(const PageCallbackFunc& pageCallback);
+	void completeStream(const PageCallbackFunc& pageCallback);
 
 private:
+	static void executePageCallback(const PageCallbackFunc& pageCallback, const ogg_page& page);
+	void encodeBuffers(const float* leftBuffer, const float* rightBuffer, size_t frameCount);
+
 	void throwIfComplete();
-	void throwIfWrittenHeaders();
 
 	bool m_isComplete;
-	bool m_hasWrittenHeaders;
+
+	int m_streamID;
 	vorbis_info m_info;
 	vorbis_comment m_comment;
 	vorbis_dsp_state m_dspState;
 	vorbis_block m_block;
 	ogg_stream_state m_stream;
 
-	ogg_page m_page;
-	ogg_packet m_packet;
-
-	std::vector<float> m_rawBuffer[2];
+	std::array<std::vector<float>, 2> m_overlapBuffers;
+	bool m_isWritingOverlapRegion;
 	size_t m_overlapOffset;
 
-	constexpr static int s_writeChunkSize = 1024;
+	constexpr static size_t s_writeChunkSize = 1024;
 };
