@@ -23,10 +23,12 @@ list(APPEND MIDIRENDERER_SRC
 	src/platformargswrapper.h
 	src/pathresolution.h
 	src/oggvorbisencoder.h
+	src/midivorbisrenderer.h
 	src/platformsupport.cpp
 	src/platformargswrapper.cpp
 	src/pathresolution.cpp
 	src/oggvorbisencoder.cpp
+	src/midivorbisrenderer.cpp
 	src/midirenderer.cpp)
 
 add_executable(midirenderer "${MIDIRENDERER_SRC}")
