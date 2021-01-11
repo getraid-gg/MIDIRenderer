@@ -149,7 +149,17 @@ int MAIN(int argc, argv_t** argv)
 		return 1;
 	}
 
-	MIDIVorbisRenderer renderer(soundfontPath, isLoopingInFile, beatDivision);
+	MIDIVorbisRenderer renderer(isLoopingInFile, beatDivision);
+	try
+	{
+		renderer.loadSoundfont(soundfontPath);
+	}
+	catch (std::exception& e)
+	{
+		std::cout << "Failed to load soundfont at " << soundfontPath << ": " <<
+			e.what() << std::endl;
+		return 1;
+	}
 
 	for (int i = 0; i < midiFiles.size(); i++)
 	{

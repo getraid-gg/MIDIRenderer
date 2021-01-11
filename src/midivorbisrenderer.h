@@ -14,9 +14,13 @@ namespace midirenderer
 	class MIDIVorbisRenderer
 	{
 	public:
-		MIDIVorbisRenderer(std::string sondfontPath, bool isLoopingInFile, int endingBeatDivision);
+		MIDIVorbisRenderer(bool isLoopingInFile = false, int endingBeatDivision = -1);
 
-		bool renderFile(std::string sourcePath, std::string outputPath);
+		void loadSoundfont(std::string soundfontPath);
+
+		void renderFile(std::string sourcePath, std::string outputPath);
+
+		bool getHasSoundfont();
 	private:
 		void renderSong(PlayerCallbackData& callbackData, std::string fileName, OggVorbisEncoder& encoder, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& samplePosition);
 		void readSampleFromSynth(float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder);
@@ -32,7 +36,7 @@ namespace midirenderer
 		int m_endingBeatDivision;
 
 		deleter_unique_ptr<fluid_settings_t> m_fluidSettings;
-		deleter_unique_ptr<fluid_synth_t> m_fluidSynth;
+		deleter_unique_ptr<fluid_synth_t> m_synth;
 
 		constexpr static size_t s_audioBufferSize = 1024;
 	};

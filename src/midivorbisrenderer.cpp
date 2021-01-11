@@ -27,10 +27,10 @@ namespace midirenderer
 			m_loopTick(-1), m_queuedSeek(-1), m_hasHitLoopPoint(false) { }
 	};
 
-	MIDIVorbisRenderer::MIDIVorbisRenderer(std::string soundfontPath, bool isLoopingInFile, int endingBeatDivision) :
+	MIDIVorbisRenderer::MIDIVorbisRenderer(bool isLoopingInFile, int endingBeatDivision) :
 		m_isLoopingInFile(isLoopingInFile), m_endingBeatDivision(endingBeatDivision),
 		m_fluidSettings(nullptr, nullptr),
-		m_fluidSynth(nullptr, nullptr)
+		m_synth(nullptr, nullptr)
 	{
 		m_fluidSettings = deleter_unique_ptr<fluid_settings_t>(new_fluid_settings(), delete_fluid_settings);
 
@@ -44,21 +44,35 @@ namespace midirenderer
 		// From the docs: "since this is a non-realtime scenario, there is no need to pin the sample data"
 		fluid_settings_setint(m_fluidSettings.get(), "synth.lock-memory", 0);
 
-		m_fluidSynth = deleter_unique_ptr<fluid_synth_t>(new_fluid_synth(m_fluidSettings.get()), delete_fluid_synth);
-		int soundfontLoadResult = fluid_synth_sfload(m_fluidSynth.get(), soundfontPath.c_str(), 1);
+		m_synth = deleter_unique_ptr<fluid_synth_t>(new_fluid_synth(m_fluidSettings.get()), delete_fluid_synth);
+	}
+
+	void MIDIVorbisRenderer::loadSoundfont(std::string soundfontPath)
+	{
+		if (getHasSoundfont())
+		{
+			fluid_synth_sfunload(m_synth.get(), 0, 1);
+		}
+
+		int soundfontLoadResult = fluid_synth_sfload(m_synth.get(), soundfontPath.c_str(), 1);
 		if (soundfontLoadResult == FLUID_FAILED)
 		{
 			throw std::invalid_argument("Failed to load the soundfont at " + soundfontPath);
 		}
 	}
 
-	bool MIDIVorbisRenderer::renderFile(std::string sourcePath, std::string outputPath)
+	void MIDIVorbisRenderer::renderFile(std::string sourcePath, std::string outputPath)
 	{
+		if (!getHasSoundfont())
+		{
+			throw std::runtime_error("Cannot render with no soundfont loaded");
+		}
+
 		std::default_random_engine rng;
 		rng.seed(time(NULL));
 		OggVorbisEncoder encoder = OggVorbisEncoder(static_cast<int>(rng()), 44100, 0.4);
 
-		PlayerCallbackData callbackData(nullptr, m_fluidSynth.get(), m_isLoopingInFile);
+		PlayerCallbackData callbackData(nullptr, m_synth.get(), m_isLoopingInFile);
 		uint64_t samplePosition = 0;
 		bool hasLoopPoint = false;
 		uint64_t loopPoint = 0;
@@ -69,7 +83,7 @@ namespace midirenderer
 			renderSong(callbackData, sourcePath, encoder, hasLoopPoint, loopPoint, samplePosition);
 		}
 
-		fluid_synth_all_sounds_off(m_fluidSynth.get(), -1);
+		fluid_synth_all_sounds_off(m_synth.get(), -1);
 
 		encoder.addComment("ENCODER", "libvorbis (midirenderer)");
 		if (hasLoopPoint)
@@ -89,12 +103,17 @@ namespace midirenderer
 		encoder.readHeader(pageCallback);
 		encoder.completeStream(pageCallback);
 
-		return true;
+		return;
+	}
+
+	bool MIDIVorbisRenderer::getHasSoundfont()
+	{
+		return fluid_synth_sfcount(m_synth.get()) > 0;
 	}
 
 	void MIDIVorbisRenderer::renderSong(PlayerCallbackData& callbackData, std::string fileName, OggVorbisEncoder& encoder, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& samplePosition)
 	{
-		deleter_unique_ptr<fluid_player_t> player(new_fluid_player(m_fluidSynth.get()), delete_fluid_player);
+		deleter_unique_ptr<fluid_player_t> player(new_fluid_player(m_synth.get()), delete_fluid_player);
 
 		callbackData.m_player = player.get();
 		fluid_player_set_playback_callback(player.get(), playerEventCallback, static_cast<void*>(&callbackData));
@@ -174,7 +193,7 @@ namespace midirenderer
 		// samplePosition isn't incremented here because it's used to determine loop points
 		// and the runoff is not meant to delay the loop point at the end of the song.
 		encoder.startOverlapRegion();
-		while (fluid_synth_get_active_voice_count(m_fluidSynth.get()) > 0)
+		while (fluid_synth_get_active_voice_count(m_synth.get()) > 0)
 		{
 			readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
 		}
@@ -188,7 +207,7 @@ namespace midirenderer
 
 	void MIDIVorbisRenderer::readSampleFromSynth(float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder)
 	{
-		if (fluid_synth_write_float(m_fluidSynth.get(), 1, leftBuffer, bufferIndex, 1, rightBuffer, bufferIndex, 1))
+		if (fluid_synth_write_float(m_synth.get(), 1, leftBuffer, bufferIndex, 1, rightBuffer, bufferIndex, 1))
 		{
 			throw std::runtime_error("Synth encountered an error");
 		}
