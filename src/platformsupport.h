@@ -18,7 +18,10 @@
  * In the meantime, a workaround is in place to allow as much UTF-8/UTF-16 support as possible
  * through FluidSynth on Windows, given the interface for loading files.
 */
-#include <fluidsynth.h>
+#ifndef FLUIDSYNTH_API
+#define FLUIDSYNTH_API __declspec(dllimport)
+#endif
+#include <fluidsynth/version.h>
 
 #if !defined(WINDOWS_UTF16_WORKAROUND) && (FLUID_VERSION_MAJOR < 3)
 #define WINDOWS_UTF16_WORKAROUND
