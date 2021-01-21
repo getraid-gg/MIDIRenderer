@@ -49,9 +49,10 @@ endif()
 set_static_runtime(midirenderer)
 
 if (WIN32)
-set(INSTALL_DLLS_SCRIPT "${CMAKE_BINARY_DIR}/install_dlls.cmake")
+set(COPY_DLLS_SCRIPT "${CMAKE_BINARY_DIR}/copy_dlls.cmake")
 list(APPEND EXECUTABLES
     midirenderer)
-configure_file(install_dlls.cmake.in ${INSTALL_DLLS_SCRIPT} @ONLY)
-install(SCRIPT ${INSTALL_DLLS_SCRIPT})
+configure_file(copy_dlls.cmake.in ${COPY_DLLS_SCRIPT} @ONLY)
+add_custom_command(TARGET midirenderer POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -DCONFIG_NAME=$<CONFIG> -P ${COPY_DLLS_SCRIPT})
 endif()
