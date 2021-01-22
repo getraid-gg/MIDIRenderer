@@ -20,13 +20,13 @@ int MAIN(int argc, argv_t** argv)
 {
 	PlatformArgsWrapper wrapper(argc, argv);
 	char** wrappedArgv = wrapper.getArgv();
-	cxxopts::Options options(wrappedArgv[0], "  A midi to RPGMV-compatible looping OGG converter");
+	cxxopts::Options options(wrappedArgv[0], "  A MIDI to RPGMV-compatible looping OGG converter");
 
 	options.positional_help("<files> -f <soundfont>");
 	options.add_options()
 		("help", "Show this help document")
 		("files", "The midi file(s) to convert", cxxopts::value<std::vector<std::string>>())
-		("f,soundfont", "(Required) The path of the soundfont to use", cxxopts::value<std::string>(), "soundfont.sf2")
+		("f,soundfont", "(Required) The path to the soundfont to use", cxxopts::value<std::string>(), "soundfont.sf2")
 		("d,destination", "The folder to place the rendered files in", cxxopts::value<std::string>(), "output")
 		("loop", "Render the audio looped to help make the loop more seamless at the cost of filesize")
 		("end-on-division", "Align the end of the song to a note division up to a 64th note",
