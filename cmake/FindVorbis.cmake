@@ -89,21 +89,21 @@ find_path (Vorbis_Vorbis_INCLUDE_DIR vorbis/codec.h
 	HINTS
 		${PC_Vorbis_Vorbis_INCLUDEDIR}
 		${PC_Vorbis_Vorbis_INCLUDE_DIRS}
-		${Vorbis_ROOT}
+		${Vorbis_ROOT}/include
 	)
 
 find_path (Vorbis_Enc_INCLUDE_DIR vorbis/vorbisenc.h
 	HINTS
 		${PC_Vorbis_Enc_INCLUDEDIR}
 		${PC_Vorbis_Enc_INCLUDE_DIRS}
-		${Vorbis_ROOT}
+		${Vorbis_ROOT}/include
 	)
 
 find_path (Vorbis_File_INCLUDE_DIR vorbis/vorbisfile.h
 	HINTS
 		${PC_Vorbis_File_INCLUDEDIR}
 		${PC_Vorbis_File_INCLUDE_DIRS}
-		${Vorbis_ROOT}
+		${Vorbis_ROOT}/include
 	)
 
 find_library (Vorbis_Vorbis_LIBRARY
@@ -115,7 +115,7 @@ find_library (Vorbis_Vorbis_LIBRARY
 	HINTS
 		${PC_Vorbis_Vorbis_LIBDIR}
 		${PC_Vorbis_Vorbis_LIBRARY_DIRS}
-		${Vorbis_ROOT}
+		${Vorbis_ROOT}/lib
 	)
 
 find_library (Vorbis_Enc_LIBRARY
@@ -127,7 +127,7 @@ find_library (Vorbis_Enc_LIBRARY
 	HINTS
 		${PC_Vorbis_Enc_LIBDIR}
 		${PC_Vorbis_Enc_LIBRARY_DIRS}
-		${Vorbis_ROOT}
+		${Vorbis_ROOT}/lib
 	)
 
 find_library (Vorbis_File_LIBRARY
@@ -139,7 +139,7 @@ find_library (Vorbis_File_LIBRARY
 	HINTS
 		${PC_Vorbis_File_LIBDIR}
 		${PC_Vorbis_File_LIBRARY_DIRS}
-		${Vorbis_ROOT}
+		${Vorbis_ROOT}/lib
 	)
 
 include (FindPackageHandleStandardArgs)

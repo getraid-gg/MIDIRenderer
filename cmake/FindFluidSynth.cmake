@@ -6,6 +6,8 @@
 #  FLUIDSYNTH_INCLUDE_DIRS - the libfluidsynth include directory
 #  FLUIDSYNTH_LIBRARIES - Link these to use libfluidsynth
 #  FLUIDSYNTH_VERSION_MAJOR
+#
+#  Users may define FLUIDSYNTH_ROOT to help find this library
 
 if (FLUIDSYNTH_LIBRARIES AND FLUIDSYNTH_INCLUDE_DIRS)
   # in cache already
@@ -20,6 +22,7 @@ else (FLUIDSYNTH_LIBRARIES AND FLUIDSYNTH_INCLUDE_DIRS)
       /usr/local/include
       /opt/local/include
       /sw/include
+	  ${FLUIDSYNTH_ROOT}/include
   )
   
   find_library(FLUIDSYNTH_LIBRARY
@@ -30,6 +33,7 @@ else (FLUIDSYNTH_LIBRARIES AND FLUIDSYNTH_INCLUDE_DIRS)
       /usr/local/lib
       /opt/local/lib
       /sw/lib
+	  ${FLUIDSYNTH_ROOT}/lib
   )
 
   set(FLUIDSYNTH_INCLUDE_DIRS

@@ -19,7 +19,7 @@ find_path (OGG_INCLUDE_DIR ogg/ogg.h
 	HINTS
 		${PC_OGG_INCLUDEDIR}
 		${PC_OGG_INCLUDE_DIRS}
-		${OGG_ROOT}
+		${OGG_ROOT}/include
 	)
 # MSVC built ogg may be named ogg_static.
 # The provided project files name the library with the lib prefix.
@@ -32,7 +32,7 @@ find_library (OGG_LIBRARY
 	HINTS
 		${PC_OGG_LIBDIR}
 		${PC_OGG_LIBRARY_DIRS}
-		${OGG_ROOT}
+		${OGG_ROOT}/lib
 	)
 # Handle the QUIETLY and REQUIRED arguments and set OGG_FOUND
 # to TRUE if all listed variables are TRUE.
