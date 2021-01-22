@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(midirenderer)
+project(midirenderer VERSION 1.0.0)
 set(CMAKE_CXX_STANDARD 17)
 
 set(MSVC_USE_STATIC_RUNTIME_LIBRARY TRUE CACHE BOOL "Whether to use the static MSVC runtime or the runtime DLLs")
@@ -51,8 +51,32 @@ set_static_runtime(midirenderer)
 if (WIN32)
 set(COPY_DLLS_SCRIPT "${CMAKE_BINARY_DIR}/copy_dlls.cmake")
 list(APPEND EXECUTABLES
-    midirenderer)
+	midirenderer)
 configure_file(copy_dlls.cmake.in ${COPY_DLLS_SCRIPT} @ONLY)
 add_custom_command(TARGET midirenderer POST_BUILD
 	COMMAND ${CMAKE_COMMAND} -DCONFIG_NAME=$<CONFIG> -P ${COPY_DLLS_SCRIPT})
 endif()
+
+install(TARGETS midirenderer
+	RUNTIME DESTINATION bin
+	COMPONENT midirenderer)
+
+if (WIN32)
+install(DIRECTORY "${CMAKE_BINARY_DIR}/$<CONFIG>/"
+	DESTINATION bin
+	COMPONENT midirenderer
+	FILES_MATCHING PATTERN "*.dll")
+endif (WIN32)
+
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/licenses"
+	DESTINATION .
+	COMPONENT packaging EXCLUDE_FROM_ALL)
+
+set(CPACK_PACKAGING_INSTALL_PREFIX "/")
+set(CPACK_INSTALL_CMAKE_PROJECTS
+	"${CMAKE_CURRENT_BINARY_DIR};${CMAKE_PROJECT_NAME};midirenderer;/"
+	"${CMAKE_CURRENT_BINARY_DIR};${CMAKE_PROJECT_NAME};packaging;/")
+set(CPACK_PACKAGE_VENDOR "getraid-gg")
+set(CPACK_PACKAGE_DESCRIPTION "A midi to RPGMV-compatible looping OGG converter")
+set(CPACK_GENERATOR "ZIP")
+include(CPack)
