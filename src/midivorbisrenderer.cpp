@@ -197,11 +197,7 @@ namespace midirenderer
 		{
 			readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
 		}
-
-		if (bufferIndex != 0)
-		{
-			encoder.writeBuffers(leftBuffer, rightBuffer, bufferIndex);
-		}
+		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
 		encoder.endOverlapRegion();
 	}
 
@@ -216,6 +212,15 @@ namespace midirenderer
 		{
 			bufferIndex -= s_audioBufferSize;
 			encoder.writeBuffers(leftBuffer, rightBuffer, s_audioBufferSize);
+		}
+	}
+
+	void MIDIVorbisRenderer::flushBuffersToEncoder(float* leftBuffer, float* rightBuffer, size_t& bufferLength, OggVorbisEncoder& encoder)
+	{
+		if (bufferLength > 0)
+		{
+			encoder.writeBuffers(leftBuffer, rightBuffer, bufferLength);
+			bufferLength = 0;
 		}
 	}
 

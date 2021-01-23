@@ -137,6 +137,8 @@ void OggVorbisEncoder::completeStream(const PageCallbackFunc& pageCallback)
 
 	vorbis_analysis_wrote(&m_dspState, 0);
 
+	flushBufferToStream();
+
 	readStreamPages(pageCallback);
 }
 
@@ -147,49 +149,44 @@ void OggVorbisEncoder::executePageCallback(const PageCallbackFunc& pageCallback,
 
 void OggVorbisEncoder::encodeBuffers(const float* leftBuffer, const float* rightBuffer, size_t frameCount)
 {
-	size_t offset = 0;
-	size_t framesRemaining = frameCount;
-	while (framesRemaining > 0)
+	float** buffer = vorbis_analysis_buffer(&m_dspState, frameCount);
+
+	std::copy(leftBuffer, &leftBuffer[frameCount], buffer[0]);
+	std::copy(rightBuffer, &rightBuffer[frameCount], buffer[1]);
+
+	vorbis_analysis_wrote(&m_dspState, frameCount);
+
+	flushBufferToStream();
+}
+
+void OggVorbisEncoder::flushBufferToStream()
+{
+	while (true)
 	{
-		size_t framesToWrite = std::min(s_writeChunkSize, framesRemaining);
+		int blockStatus = vorbis_analysis_blockout(&m_dspState, &m_block);
+		if (blockStatus == 0) { break; }
+		else if (blockStatus < 0)
+		{
+			throw std::runtime_error("Failed to read an audio block while encoding");
+		}
 
-		float** buffer = vorbis_analysis_buffer(&m_dspState, framesToWrite);
-
-		std::copy(&leftBuffer[offset], &leftBuffer[offset + framesToWrite], buffer[0]);
-		std::copy(&rightBuffer[offset], &rightBuffer[offset + framesToWrite], buffer[1]);
-
-		vorbis_analysis_wrote(&m_dspState, framesToWrite);
-
-		framesRemaining -= framesToWrite;
-		offset += framesToWrite;
+		// This is only used when using bitrate management but it's
+		// considered good practice even when not using bitrate management
+		// https://xiph.org/vorbis/doc/libvorbis/vorbis_analysis.html
+		vorbis_analysis(&m_block, nullptr);
+		vorbis_bitrate_addblock(&m_block);
 
 		while (true)
 		{
-			int blockStatus = vorbis_analysis_blockout(&m_dspState, &m_block);
-			if (blockStatus == 0) { break; }
-			else if (blockStatus < 0)
+			ogg_packet packet;
+			int packetStatus = vorbis_bitrate_flushpacket(&m_dspState, &packet);
+			if (packetStatus == 0) { break; }
+			else if (packetStatus < 0)
 			{
-				throw std::runtime_error("Failed to read an audio block while encoding");
+				throw std::runtime_error("Failed to read a packet audio block while encoding");
 			}
 
-			// This is only used when using bitrate management but it's
-			// considered good practice even when not using bitrate management
-			// https://xiph.org/vorbis/doc/libvorbis/vorbis_analysis.html
-			vorbis_analysis(&m_block, nullptr);
-			vorbis_bitrate_addblock(&m_block);
-
-			while (true)
-			{
-				ogg_packet packet;
-				int packetStatus = vorbis_bitrate_flushpacket(&m_dspState, &packet);
-				if (packetStatus == 0) { break; }
-				else if (packetStatus < 0)
-				{
-					throw std::runtime_error("Failed to read a packet audio block while encoding");
-				}
-
-				ogg_stream_packetin(&m_stream, &packet);
-			}
+			ogg_stream_packetin(&m_stream, &packet);
 		}
 	}
 }
