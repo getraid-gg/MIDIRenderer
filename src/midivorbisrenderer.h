@@ -37,6 +37,14 @@ namespace midirenderer
 
 		void renderSong(PlayerCallbackData& callbackData, std::string fileName, OggVorbisEncoder& encoder, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& samplePosition);
 
+		void renderShortLoop(deleter_unique_ptr<fluid_player_t>& player, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder,
+			uint64_t loopStartSample, size_t overlapSamples, uint64_t& samplePosition, uint64_t& loopPoint);
+
+		void renderDoubleLoop(PlayerCallbackData& callbackData, deleter_unique_ptr<fluid_player_t>& player, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder,
+			uint64_t& loopPoint, uint64_t& samplePosition, int& lastTempo, uint64_t& lastTempoSample);
+
+		void renderToBeatDivision(uint64_t& samplePosition, uint64_t lastTempoSample, int lastTempo, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder);
+
 		void readSampleFromSynth(float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder);
 		void clearSynthBuffer();
 		void flushBuffersToEncoder(float* leftBuffer, float* rightBuffer, size_t& bufferLength, OggVorbisEncoder& encoder);

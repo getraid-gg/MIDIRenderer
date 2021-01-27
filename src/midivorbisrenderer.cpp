@@ -148,20 +148,7 @@ namespace midirenderer
 
 		fluid_player_join(player.get());
 
-		if (m_endingBeatDivision != -1)
-		{
-			uint64_t samplesSinceTempoChange = samplePosition - lastTempoSample;
-			double alignmentTempo = 4.0 / m_endingBeatDivision * (lastTempo / 1000000.0);
-			double samplesPerAlignedBeat = 44100.0 * (alignmentTempo);
-			double beatsElapsed = samplesSinceTempoChange / samplesPerAlignedBeat;
-			uint64_t lastAlignedBeat = static_cast<uint64_t>(beatsElapsed) + 1.0;
-			uint64_t lastSample = static_cast<uint64_t>(lastAlignedBeat * samplesPerAlignedBeat);
-			for (int i = samplePosition; i < lastSample; i++)
-			{
-				readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
-				samplePosition++;
-			}
-		}
+		renderToBeatDivision(samplePosition, lastTempoSample, lastTempo, leftBuffer, rightBuffer, bufferIndex, encoder);
 
 		// To ensure no non-runoff samples are written to the encoder as overlap samples,
 		// all buffered samples need to be written to the encoder before playing voice runoff
@@ -200,95 +187,12 @@ namespace midirenderer
 			{
 			case LoopMode::Short:
 			{
-				fluid_player_play(loopPlayer.get());
-				clearSynthBuffer();
-
-				// Just jumping to the loop point seems to create an unavoidable pop when the rendered file's loop point is reached
-				// (the short loop mode end, not the song loop point) but synthesizing up to the song loop point and throwing
-				// the result away seems to loop just fine...
-				flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
-
-				int synthBufferSize = fluid_synth_get_internal_bufsize(m_synth.get());
-				uint64_t samplesToLoopPoint = loopStartSample - synthBufferSize;
-
-				float throwawayBuffer = 0;
-				fluid_synth_write_float(m_synth.get(), samplesToLoopPoint, &throwawayBuffer, 0, 0, &throwawayBuffer, 0, 0);
-				m_framesSinceSynthClear = (m_framesSinceSynthClear + samplesToLoopPoint) % synthBufferSize;
-
-				fluid_synth_all_sounds_off(m_synth.get(), -1);
-				clearSynthBuffer();
-
-				for (int i = 0; i < overlapSamples; i++)
-				{
-					readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
-				}
-
-				samplePosition += overlapSamples;
-				loopPoint += overlapSamples;
-
-				flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
-
-				// Synthesizing a little bit extra helps prevent a small pop, click or other
-				// looping artifact caused by Vorbis' lossy encoding. See the Vorbis documentation
-				// for more information: https://xiph.org/vorbis/doc/vorbisfile/crosslap.html
-				// The main idea: synthesizing an extra 64 samples will help Vorbis decoders
-				// avoid a pop when looping. This only helps for applications that use Vorbis
-				// lapping when playing Vorbis files, which RPG Maker MV (through the Chromium
-				// implementation of the Web Audio API) doesn't seem to use.
-
-				// Additionally, this might also give the compression some more information to place
-				// the very last sample in the right spot, which might prevent a very, very tiny click
-				// from the last sample not quite fitting
-
-				encoder.startOverlapRegion();
-
-				for (int i = 0; i < 64; i++)
-				{
-					readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
-				}
-				flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
-
-				encoder.endOverlapRegion();
-
-				fluid_player_stop(loopPlayer.get());
+				renderShortLoop(loopPlayer, leftBuffer, rightBuffer, bufferIndex, encoder, loopStartSample, overlapSamples, samplePosition, loopPoint);
 				break;
 			}
 			case LoopMode::Double:
 			{
-				callbackData.m_queuedSeek = callbackData.m_loopTick;
-				loopPoint = samplePosition;
-				fluid_player_play(loopPlayer.get());
-				while (fluid_player_get_status(loopPlayer.get()) == FLUID_PLAYER_PLAYING)
-				{
-					readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
-
-					int tempo = fluid_player_get_midi_tempo(loopPlayer.get());
-					if (tempo != lastTempo)
-					{
-						lastTempo = tempo;
-						lastTempoSample = samplePosition;
-					}
-					samplePosition++;
-				}
-
-				fluid_player_join(loopPlayer.get());
-
-				if (m_endingBeatDivision != -1)
-				{
-					uint64_t samplesSinceTempoChange = samplePosition - lastTempoSample;
-					double alignmentTempo = 4.0 / m_endingBeatDivision * (lastTempo / 1000000.0);
-					double samplesPerAlignedBeat = 44100.0 * (alignmentTempo);
-					double beatsElapsed = samplesSinceTempoChange / samplesPerAlignedBeat;
-					uint64_t lastAlignedBeat = static_cast<uint64_t>(beatsElapsed) + 1.0;
-					uint64_t lastSample = static_cast<uint64_t>(lastAlignedBeat * samplesPerAlignedBeat);
-					for (int j = samplePosition; j <= lastSample; j++)
-					{
-						readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
-						samplePosition++;
-					}
-				}
-
-				flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
+				renderDoubleLoop(callbackData, loopPlayer, leftBuffer, rightBuffer, bufferIndex, encoder, loopPoint, samplePosition, lastTempo, lastTempoSample);
 				break;
 			}
 			default:
@@ -297,32 +201,103 @@ namespace midirenderer
 		}
 	}
 
-	void MIDIVorbisRenderer::loadMIDIFile(std::string& fileName, fluid_player_t* player)
+	void MIDIVorbisRenderer::renderShortLoop(deleter_unique_ptr<fluid_player_t>& player, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder,
+		uint64_t loopStartSample, size_t overlapSamples, uint64_t& samplePosition, uint64_t& loopPoint)
 	{
-#ifndef WINDOWS_UTF16_WORKAROUND
-		fluid_player_add(player, fileName.c_str());
-#else
-		size_t filenameSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, fileName.c_str(), -1, NULL, 0);
-		auto filenameString = std::make_unique<wchar_t[]>(filenameSize);
-		MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, fileName.c_str(), -1, filenameString.get(), filenameSize);
+		fluid_player_play(player.get());
+		clearSynthBuffer();
 
-		std::shared_ptr<FILE> file(_wfopen(filenameString.get(), L"rb"), fclose);
+		// Just jumping to the loop point seems to create an unavoidable pop when the rendered file's loop point is reached
+		// (the short loop mode end, not the song loop point) but synthesizing up to the song loop point and throwing
+		// the result away seems to loop just fine...
+		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
 
-		if (file.get() == NULL)
+		int synthBufferSize = fluid_synth_get_internal_bufsize(m_synth.get());
+		uint64_t samplesToLoopPoint = loopStartSample - synthBufferSize;
+
+		float throwawayBuffer = 0;
+		fluid_synth_write_float(m_synth.get(), samplesToLoopPoint, &throwawayBuffer, 0, 0, &throwawayBuffer, 0, 0);
+		m_framesSinceSynthClear = (m_framesSinceSynthClear + samplesToLoopPoint) % synthBufferSize;
+
+		fluid_synth_all_sounds_off(m_synth.get(), -1);
+		clearSynthBuffer();
+
+		for (int i = 0; i < overlapSamples; i++)
 		{
-			throw std::invalid_argument("Failed to open MIDI file at " + fileName);
+			readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
 		}
 
-		_fseeki64(file.get(), 0LL, SEEK_END);
-		__int64 fileLength = _ftelli64(file.get());
-		rewind(file.get());
-		auto fileContents = std::make_unique<char[]>(fileLength);
+		samplePosition += overlapSamples;
+		loopPoint += overlapSamples;
 
-		fread_s(fileContents.get(), fileLength, sizeof(char), fileLength, file.get());
+		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
 
-		fluid_player_add_mem(player, fileContents.get(), fileLength);
-		file.reset();
-#endif
+		// Synthesizing a little bit extra helps prevent a small pop, click or other
+		// looping artifact caused by Vorbis' lossy encoding. See the Vorbis documentation
+		// for more information: https://xiph.org/vorbis/doc/vorbisfile/crosslap.html
+		// The main idea: synthesizing an extra 64 samples will help Vorbis decoders
+		// avoid a pop when looping. This only helps for applications that use Vorbis
+		// lapping when playing Vorbis files, which RPG Maker MV (through the Chromium
+		// implementation of the Web Audio API) doesn't seem to use.
+
+		// Additionally, this might also give the compression some more information to place
+		// the very last sample in the right spot, which might prevent a very, very tiny click
+		// from the last sample not quite fitting
+
+		encoder.startOverlapRegion();
+
+		for (int i = 0; i < 64; i++)
+		{
+			readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
+		}
+		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
+
+		encoder.endOverlapRegion();
+
+		fluid_player_stop(player.get());
+	}
+
+	void MIDIVorbisRenderer::renderDoubleLoop(PlayerCallbackData& callbackData, deleter_unique_ptr<fluid_player_t>& player, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder,
+		uint64_t& loopPoint, uint64_t& samplePosition, int& lastTempo, uint64_t& lastTempoSample)
+	{
+		callbackData.m_queuedSeek = callbackData.m_loopTick;
+		loopPoint = samplePosition;
+		fluid_player_play(player.get());
+		while (fluid_player_get_status(player.get()) == FLUID_PLAYER_PLAYING)
+		{
+			readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
+
+			int tempo = fluid_player_get_midi_tempo(player.get());
+			if (tempo != lastTempo)
+			{
+				lastTempo = tempo;
+				lastTempoSample = samplePosition;
+			}
+			samplePosition++;
+		}
+
+		fluid_player_join(player.get());
+
+		renderToBeatDivision(samplePosition, lastTempoSample, lastTempo, leftBuffer, rightBuffer, bufferIndex, encoder);
+
+		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
+	}
+
+	void MIDIVorbisRenderer::renderToBeatDivision(uint64_t& samplePosition, uint64_t lastTempoSample, int lastTempo, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder)
+	{
+		if (m_endingBeatDivision != -1) { return; }
+
+		uint64_t samplesSinceTempoChange = samplePosition - lastTempoSample;
+		double alignmentTempo = 4.0 / m_endingBeatDivision * (lastTempo / 1000000.0);
+		double samplesPerAlignedBeat = 44100.0 * (alignmentTempo);
+		double beatsElapsed = samplesSinceTempoChange / samplesPerAlignedBeat;
+		uint64_t lastAlignedBeat = static_cast<uint64_t>(beatsElapsed) + 1.0;
+		uint64_t lastSample = static_cast<uint64_t>(lastAlignedBeat * samplesPerAlignedBeat);
+		for (int i = samplePosition; i < lastSample; i++)
+		{
+			readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
+			samplePosition++;
+		}
 	}
 
 	void MIDIVorbisRenderer::readSampleFromSynth(float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder)
@@ -356,6 +331,34 @@ namespace midirenderer
 			encoder.writeBuffers(leftBuffer, rightBuffer, bufferLength);
 			bufferLength = 0;
 		}
+	}
+
+	void MIDIVorbisRenderer::loadMIDIFile(std::string& fileName, fluid_player_t* player)
+	{
+#ifndef WINDOWS_UTF16_WORKAROUND
+		fluid_player_add(player, fileName.c_str());
+#else
+		size_t filenameSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, fileName.c_str(), -1, NULL, 0);
+		auto filenameString = std::make_unique<wchar_t[]>(filenameSize);
+		MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, fileName.c_str(), -1, filenameString.get(), filenameSize);
+
+		std::shared_ptr<FILE> file(_wfopen(filenameString.get(), L"rb"), fclose);
+
+		if (file.get() == NULL)
+		{
+			throw std::invalid_argument("Failed to open MIDI file at " + fileName);
+		}
+
+		_fseeki64(file.get(), 0LL, SEEK_END);
+		__int64 fileLength = _ftelli64(file.get());
+		rewind(file.get());
+		auto fileContents = std::make_unique<char[]>(fileLength);
+
+		fread_s(fileContents.get(), fileLength, sizeof(char), fileLength, file.get());
+
+		fluid_player_add_mem(player, fileContents.get(), fileLength);
+		file.reset();
+#endif
 	}
 
 	int MIDIVorbisRenderer::playerEventCallback(void* data, fluid_midi_event_t* event)
