@@ -29,6 +29,9 @@ int MAIN(int argc, argv_t** argv)
 		("f,soundfont", "(Required) The path to the soundfont to use", cxxopts::value<std::string>(), "soundfont.sf2")
 		("d,destination", "The folder to place the rendered files in", cxxopts::value<std::string>(), "output")
 		("loop", "Render the audio looped to help make the loop more seamless at the cost of filesize")
+		("loop-mode", "The mode to use when rendering the audio looped (implies --loop)\n"
+			"\tshort: (default) after the end of the song, render again from the start of the loop until all voices from the end have terminated (minimal filesize impact)\n"
+			"\tdouble: loop the audio twice (cleanest loop)", cxxopts::value<std::string>(), "short|double")
 		("end-on-division", "Align the end of the song to a note division up to a 64th note",
 			cxxopts::value<int>(), "4");
 	options.parse_positional({ "files" });
@@ -53,7 +56,30 @@ int MAIN(int argc, argv_t** argv)
 		return 0;
 	}
 
-	bool isLoopingInFile = parsedArgs.count("loop") > 0;
+	MIDIVorbisRenderer::LoopMode loopMode = MIDIVorbisRenderer::LoopMode::None;
+	if (parsedArgs.count("loop-mode") > 0)
+	{
+		std::string modeString = parsedArgs["loop-mode"].as<std::string>();
+
+		if (modeString == "short")
+		{
+			loopMode = MIDIVorbisRenderer::LoopMode::Short;
+		}
+		else if (modeString == "double")
+		{
+			loopMode = MIDIVorbisRenderer::LoopMode::Double;
+		}
+		else
+		{
+			std::cout << "Invalid loop mode" << modeString << std::endl << options.help() << std::endl;
+			return 1;
+		}
+	}
+
+	if (loopMode == MIDIVorbisRenderer::LoopMode::None && parsedArgs.count("loop") > 0)
+	{
+		loopMode = MIDIVorbisRenderer::LoopMode::Short;
+	}
 	
 	int beatDivision = -1;
 	if (parsedArgs.count("end-on-division") == 1)
@@ -149,7 +175,7 @@ int MAIN(int argc, argv_t** argv)
 		return 1;
 	}
 
-	MIDIVorbisRenderer renderer(isLoopingInFile, beatDivision);
+	MIDIVorbisRenderer renderer(loopMode, beatDivision);
 	try
 	{
 		renderer.loadSoundfont(soundfontPath);
