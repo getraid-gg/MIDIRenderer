@@ -30,8 +30,8 @@ int MAIN(int argc, argv_t** argv)
 		("d,destination", "The folder to place the rendered files in", cxxopts::value<std::string>(), "output")
 		("loop", "Render the audio looped to help make the loop more seamless at the cost of filesize")
 		("loop-mode", "The mode to use when rendering the audio looped (implies --loop)\n"
-			"\tshort: (default) after the end of the song, render again from the start of the loop until all voices from the end have terminated (minimal filesize impact)\n"
-			"\tdouble: loop the audio twice (cleanest loop)", cxxopts::value<std::string>(), "short|double")
+			"  short: (default) render again from the start of the loop until all voices from the end have terminated (minimal filesize impact)\n"
+			"  double: loop the whole song again (cleanest loop)", cxxopts::value<std::string>(), "short|double")
 		("end-on-division", "Align the end of the song to a note division up to a 64th note",
 			cxxopts::value<int>(), "4");
 	options.parse_positional({ "files" });
