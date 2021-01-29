@@ -17,6 +17,13 @@ midirenderer [OPTION...] <files> -f <soundfont>
   -d, --destination output      The folder to place the rendered files in
       --loop                    Render the audio looped to help make the loop
                                 more seamless at the cost of filesize
+      --loop-mode short|double  The mode to use when rendering the audio
+                                looped (implies --loop)
+                                  short: (default) render again from the
+                                start of the loop until all voices from the end
+                                have terminated (minimal filesize impact)
+                                  double: loop the whole song again (cleanest
+                                loop)
       --end-on-division 4       Align the end of the song to a note division
                                 up to a 64th note
 ```
@@ -81,3 +88,10 @@ The build process for your distribution should be straightforward, especially if
 The project supports packaging itself for distribution using `cmake --build . --target PACKAGE` on Windows. This generates a standalone distribution in your CMake working directory called `midirenderer-<version>-<target>.zip`. On Windows, MIDIRenderer's DLL dependency tree is automatically copied into the build folder. The packaging target uses CPack, so you may change the packaging parameters according to the [CPack documentation](https://cmake.org/cmake/help/latest/module/CPack.html). MIDIRenderer has not necessarily been configured for proper installer creation; your mileage may vary.
 
 The same CPack packager may be used with `make package`, but it is recommended you use `make install` or `checkinstall` instead.
+
+## Third-party software notices
+
+MIDIRenderer uses third-party software. License notices for this software is included in the `licenses` folder in this repository's root directory. Copies of these license notices are included in distributions of this software packaged using the above packaging method.
+
+MIDIRenderer contains a modified version of the following third-party software:
+- cxxopts 2.2.0

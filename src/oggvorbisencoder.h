@@ -28,6 +28,7 @@ public:
 private:
 	static void executePageCallback(const PageCallbackFunc& pageCallback, const ogg_page& page);
 	void encodeBuffers(const float* leftBuffer, const float* rightBuffer, size_t frameCount);
+	void flushBufferToStream();
 
 	void throwIfComplete();
 
@@ -43,6 +44,4 @@ private:
 	std::array<std::vector<float>, 2> m_overlapBuffers;
 	bool m_isWritingOverlapRegion;
 	size_t m_overlapOffset;
-
-	constexpr static size_t s_writeChunkSize = 1024;
 };
