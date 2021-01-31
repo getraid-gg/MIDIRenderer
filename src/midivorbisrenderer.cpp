@@ -124,6 +124,11 @@ namespace midirenderer
 		uint64_t lastTempoSample = samplePosition;
 		uint64_t loopStartSample = 0;
 
+		if (fluid_player_get_status(player.get()) != FLUID_PLAYER_PLAYING)
+		{
+			throw std::runtime_error("Failed to play MIDI file " + fileName);
+		}
+
 		while (fluid_player_get_status(player.get()) == FLUID_PLAYER_PLAYING)
 		{
 			readSampleFromSynth(leftBuffer, rightBuffer, bufferIndex, encoder);
@@ -285,7 +290,7 @@ namespace midirenderer
 
 	void MIDIVorbisRenderer::renderToBeatDivision(uint64_t& samplePosition, uint64_t lastTempoSample, int lastTempo, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder)
 	{
-		if (m_endingBeatDivision != -1) { return; }
+		if (m_endingBeatDivision == -1) { return; }
 
 		uint64_t samplesSinceTempoChange = samplePosition - lastTempoSample;
 		double alignmentTempo = 4.0 / m_endingBeatDivision * (lastTempo / 1000000.0);
@@ -342,22 +347,18 @@ namespace midirenderer
 		auto filenameString = std::make_unique<wchar_t[]>(filenameSize);
 		MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, fileName.c_str(), -1, filenameString.get(), filenameSize);
 
-		std::shared_ptr<FILE> file(_wfopen(filenameString.get(), L"rb"), fclose);
-
-		if (file.get() == NULL)
+		std::ifstream file(filenameString.get(), std::ios_base::in | std::ios_base::binary | std::ios_base::ate);
+		if (!file.is_open())
 		{
 			throw std::invalid_argument("Failed to open MIDI file at " + fileName);
 		}
 
-		_fseeki64(file.get(), 0LL, SEEK_END);
-		__int64 fileLength = _ftelli64(file.get());
-		rewind(file.get());
+		std::streampos fileLength = file.tellg();
+		file.seekg(0, std::ios_base::beg);
 		auto fileContents = std::make_unique<char[]>(fileLength);
-
-		fread_s(fileContents.get(), fileLength, sizeof(char), fileLength, file.get());
+		file.read(fileContents.get(), fileLength);
 
 		fluid_player_add_mem(player, fileContents.get(), fileLength);
-		file.reset();
 #endif
 	}
 
