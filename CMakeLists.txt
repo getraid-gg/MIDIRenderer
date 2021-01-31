@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(midirenderer VERSION 1.1.0)
+project(midirenderer VERSION 1.1.1)
 set(CMAKE_CXX_STANDARD 17)
 
 set(MSVC_USE_STATIC_RUNTIME_LIBRARY TRUE CACHE BOOL "Whether to use the static MSVC runtime or the runtime DLLs")
