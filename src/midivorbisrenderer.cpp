@@ -285,7 +285,7 @@ namespace midirenderer
 
 	void MIDIVorbisRenderer::renderToBeatDivision(uint64_t& samplePosition, uint64_t lastTempoSample, int lastTempo, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder)
 	{
-		if (m_endingBeatDivision != -1) { return; }
+		if (m_endingBeatDivision == -1) { return; }
 
 		uint64_t samplesSinceTempoChange = samplePosition - lastTempoSample;
 		double alignmentTempo = 4.0 / m_endingBeatDivision * (lastTempo / 1000000.0);
