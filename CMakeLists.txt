@@ -24,12 +24,14 @@ list(APPEND MIDIRENDERER_SRC
 	src/pathresolution.h
 	src/oggvorbisencoder.h
 	src/midivorbisrenderer.h
+	src/songrendercontainer.h
 	src/platformsupport.cpp
 	src/platformargswrapper.cpp
 	src/pathresolution.cpp
 	src/oggvorbisencoder.cpp
 	src/midivorbisrenderer.cpp
-	src/midirenderer.cpp)
+	src/midirenderer.cpp
+	src/songrendercontainer.cpp)
 
 add_executable(midirenderer "${MIDIRENDERER_SRC}")
 target_include_directories(midirenderer PRIVATE

@@ -9,19 +9,17 @@
 
 #include "platformsupport.h"
 #include "oggvorbisencoder.h"
+#include "songrendercontainer.h"
 
 namespace midirenderer
 {
 	struct PlayerCallbackData
 	{
-		fluid_player_t* m_player;
-		fluid_synth_t* m_synth;
 		int m_loopTick;
 		int m_queuedSeek;
 		bool m_hasHitLoopPoint;
 
-		PlayerCallbackData(fluid_player_t* player, fluid_synth_t* synth) : m_player(player), m_synth(synth),
-			m_loopTick(-1), m_queuedSeek(-1), m_hasHitLoopPoint(false) { }
+		PlayerCallbackData() : m_loopTick(-1), m_queuedSeek(-1), m_hasHitLoopPoint(false) { }
 	};
 
 	MIDIVorbisRenderer::MIDIVorbisRenderer(LoopMode loopMode, int endingBeatDivision) :
@@ -69,11 +67,13 @@ namespace midirenderer
 		rng.seed(time(NULL));
 		OggVorbisEncoder encoder = OggVorbisEncoder(static_cast<int>(rng()), 44100, 0.4);
 
-		PlayerCallbackData callbackData(nullptr, nullptr);
+		//PlayerCallbackData callbackData(nullptr, nullptr);
+		PlayerCallbackData callbackData;
 		uint64_t samplePosition = 0;
 		bool hasLoopPoint = false;
 		uint64_t loopPoint = 0;
 
+		//renderSong(callbackData, sourcePath, encoder, hasLoopPoint, loopPoint, samplePosition);
 		renderSong(callbackData, sourcePath, encoder, hasLoopPoint, loopPoint, samplePosition);
 
 		encoder.addComment("ENCODER", "libvorbis (midirenderer)");
@@ -104,50 +104,38 @@ namespace midirenderer
 
 	void MIDIVorbisRenderer::renderSong(PlayerCallbackData& callbackData, std::string fileName, OggVorbisEncoder& encoder, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& samplePosition)
 	{
-		deleter_unique_ptr<fluid_synth_t> synth(new_fluid_synth(m_fluidSettings.get()), clearAndDeleteSynth);
-		fluid_synth_add_sfont(synth.get(), fluid_synth_get_sfont(m_synth.get(), 0));
+		SongRenderContainer songRenderer = SongRenderContainer(fileName, fluid_synth_get_sfont(m_synth.get(), 0));
 
-		deleter_unique_ptr<fluid_player_t> player(new_fluid_player(synth.get()), delete_fluid_player);
-
-		callbackData.m_synth = synth.get();
-		callbackData.m_player = player.get();
-		fluid_player_set_playback_callback(player.get(), playerEventCallback, static_cast<void*>(&callbackData));
-
-		loadMIDIFile(fileName, player.get());
-
-		fluid_player_play(player.get());
-
-		int synthBufferSize = fluid_synth_get_internal_bufsize(synth.get());
-		int synthBufferPosition = 0;
-		clearSynthBuffer(synth, synthBufferPosition);
+		songRenderer.setMIDICallback(playerEventCallback, &callbackData);
+		songRenderer.startPlayback();
 
 		float leftBuffer[s_audioBufferSize];
 		float rightBuffer[s_audioBufferSize];
 		size_t bufferIndex = 0;
 
-		int lastTempo = fluid_player_get_midi_tempo(player.get());
+		int lastTempo = songRenderer.getTempo();
 		uint64_t lastTempoSample = samplePosition;
 		uint64_t loopStartSample = 0;
 
-		if (fluid_player_get_status(player.get()) != FLUID_PLAYER_PLAYING)
+		if (!songRenderer.getIsPlaying())
 		{
 			throw std::runtime_error("Failed to play MIDI file " + fileName);
 		}
 
-		while (fluid_player_get_status(player.get()) == FLUID_PLAYER_PLAYING)
+		while (songRenderer.getIsPlaying())
 		{
-			readSampleFromSynth(synth, synthBufferPosition, synthBufferSize, leftBuffer, rightBuffer, bufferIndex, encoder);
+			readSampleFromSynth(songRenderer, leftBuffer, rightBuffer, bufferIndex, encoder);
 
 			if (!hasLoopPoint && callbackData.m_hasHitLoopPoint)
 			{
 				hasLoopPoint = true;
 				loopPoint = samplePosition;
 				// The loop point actually happened one buffer ago so we need to move the loop point backward
-				loopPoint -= fluid_synth_get_internal_bufsize(synth.get());
+				loopPoint -= songRenderer.getSynthBufferSize();
 				loopStartSample = samplePosition;
 			}
 
-			int tempo = fluid_player_get_midi_tempo(player.get());
+			int tempo = songRenderer.getTempo();
 			if (tempo != lastTempo)
 			{
 				lastTempo = tempo;
@@ -156,14 +144,14 @@ namespace midirenderer
 			samplePosition++;
 		}
 
-		fluid_player_join(player.get());
+		songRenderer.join();
 
-		renderToBeatDivision(synth, synthBufferPosition, synthBufferSize, samplePosition, lastTempoSample, lastTempo, leftBuffer, rightBuffer, bufferIndex, encoder);
+		renderToBeatDivision(songRenderer, samplePosition, lastTempoSample, lastTempo, leftBuffer, rightBuffer, bufferIndex, encoder);
 
 		// To ensure no non-runoff samples are written to the encoder as overlap samples,
 		// all buffered samples need to be written to the encoder before playing voice runoff
 		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
-		fluid_synth_all_notes_off(synth.get(), -1);
+		songRenderer.silence();
 
 		// Play the voice runoff of the end, which may or may not end up part of the loop
 
@@ -172,9 +160,9 @@ namespace midirenderer
 		encoder.startOverlapRegion();
 
 		size_t overlapSamples = 0;
-		while (fluid_synth_get_active_voice_count(synth.get()) > 0)
+		while (songRenderer.getActiveVoiceCount() > 0)
 		{
-			readSampleFromSynth(synth, synthBufferPosition, synthBufferSize, leftBuffer, rightBuffer, bufferIndex, encoder);
+			readSampleFromSynth(songRenderer, leftBuffer, rightBuffer, bufferIndex, encoder);
 			overlapSamples++;
 		}
 		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
@@ -187,26 +175,20 @@ namespace midirenderer
 		// carry into the sound at the beginning of the loop.
 		if (m_loopMode != LoopMode::None)
 		{
-			deleter_unique_ptr<fluid_player_t> loopPlayer(new_fluid_player(synth.get()), delete_fluid_player);
-
-			callbackData.m_player = loopPlayer.get();
-			fluid_player_set_playback_callback(loopPlayer.get(), playerEventCallback, static_cast<void*>(&callbackData));
-
-			loadMIDIFile(fileName, loopPlayer.get());
+			songRenderer.resetPlayer();
 
 			switch (m_loopMode)
 			{
 			case LoopMode::Short:
 			{
-				renderShortLoop(synth, synthBufferPosition, synthBufferSize,
-					loopPlayer, leftBuffer, rightBuffer, bufferIndex, encoder,
+				renderShortLoop(songRenderer, leftBuffer, rightBuffer, bufferIndex, encoder,
 					loopStartSample, overlapSamples, samplePosition, loopPoint);
 				break;
 			}
 			case LoopMode::Double:
 			{
-				renderDoubleLoop(synth, synthBufferPosition, synthBufferSize,
-					callbackData, loopPlayer, leftBuffer, rightBuffer, bufferIndex, encoder,
+				renderDoubleLoop(songRenderer, callbackData,
+					leftBuffer, rightBuffer, bufferIndex, encoder,
 					loopPoint, samplePosition, lastTempo, lastTempoSample);
 				break;
 			}
@@ -216,30 +198,30 @@ namespace midirenderer
 		}
 	}
 
-	void MIDIVorbisRenderer::renderShortLoop(deleter_unique_ptr<fluid_synth_t>& synth, int& synthBufferPosition, int synthBufferSize,
-		deleter_unique_ptr<fluid_player_t>& player, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder,
-		uint64_t loopStartSample, size_t overlapSamples, uint64_t& samplePosition, uint64_t& loopPoint)
+	void MIDIVorbisRenderer::renderShortLoop(SongRenderContainer& songRenderer, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder, uint64_t loopStartSample, size_t overlapSamples, uint64_t& samplePosition, uint64_t& loopPoint)
 	{
-		fluid_player_play(player.get());
-		clearSynthBuffer(synth, synthBufferPosition);
+		songRenderer.startPlayback();
+		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
 
 		// Just jumping to the loop point seems to create an unavoidable pop when the rendered file's loop point is reached
 		// (the short loop mode end, not the song loop point) but synthesizing up to the song loop point and throwing
 		// the result away seems to loop just fine...
-		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
+		// If the start of the loop point is less than one synth buffer into the song, we don't have the granularity
+		// to render to that point so we skip this step.
+		int bufferSize = songRenderer.getSynthBufferSize();
 
-		uint64_t samplesToLoopPoint = loopStartSample - synthBufferSize;
-
-		float throwawayBuffer = 0;
-		fluid_synth_write_float(synth.get(), samplesToLoopPoint, &throwawayBuffer, 0, 0, &throwawayBuffer, 0, 0);
-		synthBufferPosition = (synthBufferPosition + samplesToLoopPoint) % synthBufferSize;
-
-		fluid_synth_all_sounds_off(synth.get(), -1);
-		clearSynthBuffer(synth, synthBufferPosition);
+		if (bufferSize < loopStartSample)
+		{
+			uint64_t samplesToLoopPoint = loopStartSample - bufferSize;
+			float throwawayBuffer = 0;
+			songRenderer.renderFrames(samplesToLoopPoint, &throwawayBuffer, &throwawayBuffer, 0);
+		}
+		songRenderer.silence();
+		songRenderer.flushSynthBuffer();
 
 		for (int i = 0; i < overlapSamples; i++)
 		{
-			readSampleFromSynth(synth, synthBufferPosition, synthBufferSize, leftBuffer, rightBuffer, bufferIndex, encoder);
+			readSampleFromSynth(songRenderer, leftBuffer, rightBuffer, bufferIndex, encoder);
 		}
 
 		samplePosition += overlapSamples;
@@ -263,27 +245,25 @@ namespace midirenderer
 
 		for (int i = 0; i < 64; i++)
 		{
-			readSampleFromSynth(synth, synthBufferPosition, synthBufferSize, leftBuffer, rightBuffer, bufferIndex, encoder);
+			readSampleFromSynth(songRenderer, leftBuffer, rightBuffer, bufferIndex, encoder);
 		}
 		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
 
 		encoder.endOverlapRegion();
 
-		fluid_player_stop(player.get());
+		songRenderer.stopPlayback();
 	}
 
-	void MIDIVorbisRenderer::renderDoubleLoop(deleter_unique_ptr<fluid_synth_t>& synth, int& synthBufferPosition, int synthBufferSize,
-		PlayerCallbackData& callbackData, deleter_unique_ptr<fluid_player_t>& player, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder,
-		uint64_t& loopPoint, uint64_t& samplePosition, int& lastTempo, uint64_t& lastTempoSample)
+	void MIDIVorbisRenderer::renderDoubleLoop(SongRenderContainer& songRenderer, PlayerCallbackData& callbackData, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder, uint64_t& loopPoint, uint64_t& samplePosition, int& lastTempo, uint64_t& lastTempoSample)
 	{
 		callbackData.m_queuedSeek = callbackData.m_loopTick;
 		loopPoint = samplePosition;
-		fluid_player_play(player.get());
-		while (fluid_player_get_status(player.get()) == FLUID_PLAYER_PLAYING)
+		songRenderer.startPlayback();
+		while (songRenderer.getIsPlaying())
 		{
-			readSampleFromSynth(synth, synthBufferPosition, synthBufferSize, leftBuffer, rightBuffer, bufferIndex, encoder);
+			readSampleFromSynth(songRenderer, leftBuffer, rightBuffer, bufferIndex, encoder);
 
-			int tempo = fluid_player_get_midi_tempo(player.get());
+			int tempo = songRenderer.getTempo();
 			if (tempo != lastTempo)
 			{
 				lastTempo = tempo;
@@ -292,14 +272,14 @@ namespace midirenderer
 			samplePosition++;
 		}
 
-		fluid_player_join(player.get());
+		songRenderer.join();
 
-		renderToBeatDivision(synth, synthBufferPosition, synthBufferSize, samplePosition, lastTempoSample, lastTempo, leftBuffer, rightBuffer, bufferIndex, encoder);
+		renderToBeatDivision(songRenderer, samplePosition, lastTempoSample, lastTempo, leftBuffer, rightBuffer, bufferIndex, encoder);
 
 		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
 	}
 
-	void MIDIVorbisRenderer::renderToBeatDivision(deleter_unique_ptr<fluid_synth_t>& synth, int& synthBufferPosition, int synthBufferSize, uint64_t& samplePosition, uint64_t lastTempoSample, int lastTempo, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder)
+	void MIDIVorbisRenderer::renderToBeatDivision(SongRenderContainer& songRenderer, uint64_t& samplePosition, uint64_t lastTempoSample, int lastTempo, float * leftBuffer, float * rightBuffer, size_t & bufferIndex, OggVorbisEncoder & encoder)
 	{
 		if (m_endingBeatDivision == -1) { return; }
 
@@ -311,19 +291,14 @@ namespace midirenderer
 		uint64_t lastSample = static_cast<uint64_t>(lastAlignedBeat * samplesPerAlignedBeat);
 		for (int i = samplePosition; i < lastSample; i++)
 		{
-			readSampleFromSynth(synth, synthBufferPosition, synthBufferSize, leftBuffer, rightBuffer, bufferIndex, encoder);
+			readSampleFromSynth(songRenderer, leftBuffer, rightBuffer, bufferIndex, encoder);
 			samplePosition++;
 		}
 	}
 
-	void MIDIVorbisRenderer::readSampleFromSynth(deleter_unique_ptr<fluid_synth_t>& synth, int& synthBufferPosition, int synthBufferSize, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder)
+	void MIDIVorbisRenderer::readSampleFromSynth(SongRenderContainer& songRenderer, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder)
 	{
-		if (fluid_synth_write_float(synth.get(), 1, leftBuffer, bufferIndex, 1, rightBuffer, bufferIndex, 1))
-		{
-			throw std::runtime_error("Synth encountered an error");
-		}
-
-		synthBufferPosition = (synthBufferPosition + 1) % synthBufferSize;
+		songRenderer.renderFrames(1, &leftBuffer[bufferIndex], &rightBuffer[bufferIndex]);
 
 		bufferIndex++;
 		if (bufferIndex >= s_audioBufferSize)
@@ -331,14 +306,6 @@ namespace midirenderer
 			bufferIndex -= s_audioBufferSize;
 			encoder.writeBuffers(leftBuffer, rightBuffer, s_audioBufferSize);
 		}
-	}
-
-	void MIDIVorbisRenderer::clearSynthBuffer(deleter_unique_ptr<fluid_synth_t>& synth, int& bufferPosition)
-	{
-		int fluidBufferSize = fluid_synth_get_internal_bufsize(synth.get());
-		float buffer = 0;
-		fluid_synth_write_float(synth.get(), fluidBufferSize - bufferPosition, &buffer, 0, 0, &buffer, 0, 0);
-		bufferPosition = 0;
 	}
 
 	void MIDIVorbisRenderer::flushBuffersToEncoder(float* leftBuffer, float* rightBuffer, size_t& bufferLength, OggVorbisEncoder& encoder)
@@ -374,13 +341,14 @@ namespace midirenderer
 #endif
 	}
 
-	int MIDIVorbisRenderer::playerEventCallback(void* data, fluid_midi_event_t* event)
+	int MIDIVorbisRenderer::playerEventCallback(fluid_player_t* player, fluid_synth_t* synth,
+		void* data, fluid_midi_event_t* event)
 	{
 		PlayerCallbackData* callbackData = static_cast<PlayerCallbackData*>(data);
 
 		if (callbackData->m_queuedSeek != -1)
 		{
-			fluid_player_seek(callbackData->m_player, callbackData->m_queuedSeek);
+			fluid_player_seek(player, callbackData->m_queuedSeek);
 			callbackData->m_queuedSeek = -1;
 			return FLUID_OK;
 		}
@@ -391,21 +359,9 @@ namespace midirenderer
 		if (eventCode == 0xb0 && eventControl == 111)
 		{
 			callbackData->m_hasHitLoopPoint = true;
-			callbackData->m_loopTick = fluid_player_get_current_tick(callbackData->m_player);
+			callbackData->m_loopTick = fluid_player_get_current_tick(player);
 		}
 
-		return fluid_synth_handle_midi_event(callbackData->m_synth, event);
-	}
-
-	void MIDIVorbisRenderer::clearAndDeleteSynth(fluid_synth_t* synth)
-	{
-		if (synth == NULL) { return; }
-		int soundfontCount = fluid_synth_sfcount(synth);
-		for (int i = soundfontCount - 1; i >= 0; i--)
-		{
-			fluid_synth_remove_sfont(synth, fluid_synth_get_sfont(synth, i));
-		}
-
-		delete_fluid_synth(synth);
+		return fluid_synth_handle_midi_event(synth, event);
 	}
 }
