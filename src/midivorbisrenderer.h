@@ -32,7 +32,7 @@ namespace midirenderer
 
 		bool getHasSoundfont();
 	private:
-		void renderSong(PlayerCallbackData& callbackData, std::string fileName, OggVorbisEncoder& encoder, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& samplePosition);
+		void renderSong(PlayerCallbackData& callbackData, std::string fileName, OggVorbisEncoder& encoder, uint64_t& loopStart, uint64_t& songLength);
 
 		void renderShortLoop(SongRenderContainer& songRenderer, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder,
 			uint64_t loopStartSample, size_t overlapSamples, uint64_t& samplePosition, uint64_t& loopPoint);
