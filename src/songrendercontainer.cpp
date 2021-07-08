@@ -108,7 +108,7 @@ namespace midirenderer
 	void SongRenderContainer::loadMIDIFile()
 	{
 #ifndef WINDOWS_UTF16_WORKAROUND
-		fluid_player_add(m_player.get(), fileName.c_str());
+		fluid_player_add(m_player.get(), m_fileName.c_str());
 #else
 		size_t filenameSize = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, m_fileName.c_str(), -1, NULL, 0);
 		auto filenameString = std::make_unique<wchar_t[]>(filenameSize);
