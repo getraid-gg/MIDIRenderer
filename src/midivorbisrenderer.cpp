@@ -67,20 +67,17 @@ namespace midirenderer
 		rng.seed(time(NULL));
 		OggVorbisEncoder encoder = OggVorbisEncoder(static_cast<int>(rng()), 44100, 0.4);
 
-		//PlayerCallbackData callbackData(nullptr, nullptr);
 		PlayerCallbackData callbackData;
-		uint64_t samplePosition = 0;
-		bool hasLoopPoint = false;
-		uint64_t loopPoint = 0;
+		uint64_t songLength = 0;
+		uint64_t loopStart = 0;
 
-		//renderSong(callbackData, sourcePath, encoder, hasLoopPoint, loopPoint, samplePosition);
-		renderSong(callbackData, sourcePath, encoder, hasLoopPoint, loopPoint, samplePosition);
+		renderSong(callbackData, sourcePath, encoder, loopStart, songLength);
 
 		encoder.addComment("ENCODER", "libvorbis (midirenderer)");
-		if (hasLoopPoint)
+		if (m_loopMode != LoopMode::None)
 		{
-			encoder.addComment("LOOPSTART", std::to_string(loopPoint));
-			encoder.addComment("LOOPLENGTH", std::to_string(samplePosition - loopPoint));
+			encoder.addComment("LOOPSTART", std::to_string(loopStart));
+			encoder.addComment("LOOPLENGTH", std::to_string(songLength - loopStart));
 		}
 
 		std::ofstream fileOutput;
@@ -102,8 +99,10 @@ namespace midirenderer
 		return fluid_synth_sfcount(m_synth.get()) > 0;
 	}
 
-	void MIDIVorbisRenderer::renderSong(PlayerCallbackData& callbackData, std::string fileName, OggVorbisEncoder& encoder, bool& hasLoopPoint, uint64_t& loopPoint, uint64_t& samplePosition)
+	void MIDIVorbisRenderer::renderSong(PlayerCallbackData& callbackData, std::string fileName, OggVorbisEncoder& encoder, uint64_t& loopStart, uint64_t& songLength)
 	{
+		loopStart = 0;
+		songLength = 0;
 		SongRenderContainer songRenderer = SongRenderContainer(fileName, fluid_synth_get_sfont(m_synth.get(), 0));
 
 		songRenderer.setMIDICallback(playerEventCallback, &callbackData);
@@ -114,7 +113,7 @@ namespace midirenderer
 		size_t bufferIndex = 0;
 
 		int lastTempo = songRenderer.getTempo();
-		uint64_t lastTempoSample = samplePosition;
+		uint64_t lastTempoSample = songLength;
 		uint64_t loopStartSample = 0;
 
 		if (!songRenderer.getIsPlaying())
@@ -122,31 +121,33 @@ namespace midirenderer
 			throw std::runtime_error("Failed to play MIDI file " + fileName);
 		}
 
+		bool hasHitLoopPoint = false;
+
 		while (songRenderer.getIsPlaying())
 		{
 			readSampleFromSynth(songRenderer, leftBuffer, rightBuffer, bufferIndex, encoder);
 
-			if (!hasLoopPoint && callbackData.m_hasHitLoopPoint)
+			if (!hasHitLoopPoint && callbackData.m_hasHitLoopPoint)
 			{
-				hasLoopPoint = true;
-				loopPoint = samplePosition;
+				hasHitLoopPoint = true;
+				loopStart = songLength;
 				// The loop point actually happened one buffer ago so we need to move the loop point backward
-				loopPoint -= songRenderer.getSynthBufferSize();
-				loopStartSample = samplePosition;
+				loopStart -= songRenderer.getSynthBufferSize();
+				loopStartSample = songLength;
 			}
 
 			int tempo = songRenderer.getTempo();
 			if (tempo != lastTempo)
 			{
 				lastTempo = tempo;
-				lastTempoSample = samplePosition;
+				lastTempoSample = songLength;
 			}
-			samplePosition++;
+			songLength++;
 		}
 
 		songRenderer.join();
 
-		renderToBeatDivision(songRenderer, samplePosition, lastTempoSample, lastTempo, leftBuffer, rightBuffer, bufferIndex, encoder);
+		renderToBeatDivision(songRenderer, songLength, lastTempoSample, lastTempo, leftBuffer, rightBuffer, bufferIndex, encoder);
 
 		// To ensure no non-runoff samples are written to the encoder as overlap samples,
 		// all buffered samples need to be written to the encoder before playing voice runoff
@@ -182,14 +183,14 @@ namespace midirenderer
 			case LoopMode::Short:
 			{
 				renderShortLoop(songRenderer, leftBuffer, rightBuffer, bufferIndex, encoder,
-					loopStartSample, overlapSamples, samplePosition, loopPoint);
+					loopStartSample, overlapSamples, songLength, loopStart);
 				break;
 			}
 			case LoopMode::Double:
 			{
 				renderDoubleLoop(songRenderer, callbackData,
 					leftBuffer, rightBuffer, bufferIndex, encoder,
-					loopPoint, samplePosition, lastTempo, lastTempoSample);
+					loopStart, songLength, lastTempo, lastTempoSample);
 				break;
 			}
 			default:
@@ -279,7 +280,7 @@ namespace midirenderer
 		flushBuffersToEncoder(leftBuffer, rightBuffer, bufferIndex, encoder);
 	}
 
-	void MIDIVorbisRenderer::renderToBeatDivision(SongRenderContainer& songRenderer, uint64_t& samplePosition, uint64_t lastTempoSample, int lastTempo, float * leftBuffer, float * rightBuffer, size_t & bufferIndex, OggVorbisEncoder & encoder)
+	void MIDIVorbisRenderer::renderToBeatDivision(SongRenderContainer& songRenderer, uint64_t& samplePosition, uint64_t lastTempoSample, int lastTempo, float* leftBuffer, float* rightBuffer, size_t& bufferIndex, OggVorbisEncoder& encoder)
 	{
 		if (m_endingBeatDivision == -1) { return; }
 

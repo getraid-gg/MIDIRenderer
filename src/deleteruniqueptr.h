@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 
 template<typename T>
 using deleter_t = void(*)(T*);

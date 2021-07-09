@@ -21,6 +21,7 @@ list(APPEND MIDIRENDERER_SRC
 	src/platformchar.h
 	src/platformsupport.h
 	src/platformargswrapper.h
+	src/deleteruniqueptr.h
 	src/pathresolution.h
 	src/oggvorbisencoder.h
 	src/midivorbisrenderer.h
