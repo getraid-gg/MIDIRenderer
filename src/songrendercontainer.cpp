@@ -70,6 +70,16 @@ namespace midirenderer
 
 	void SongRenderContainer::silence()
 	{
+		// Stop any pesky sustain pedals
+		int channelCount = fluid_synth_count_midi_channels(m_synth.get());
+		for (int i = 0; i < channelCount; i++)
+		{
+			// Sustain pedal, sustenuto pedal, "Hold 2"
+			fluid_synth_cc(m_synth.get(), i, 64, 0);
+			fluid_synth_cc(m_synth.get(), i, 66, 0);
+			fluid_synth_cc(m_synth.get(), i, 69, 0);
+		}
+
 		fluid_synth_all_notes_off(m_synth.get(), -1);
 	}
 
